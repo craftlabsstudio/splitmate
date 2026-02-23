@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Splitmate - 割り勘アプリ</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+body{font-family:'Hiragino Sans','Yu Gothic',system-ui,sans-serif;background:#f5f3ff;min-height:100vh;}
+input,select,button{font-family:inherit;}
+input{-webkit-appearance:none;}
+select{-webkit-appearance:none;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useCallback,useRef,useMemo} = React;
+
+// ================================================================
+// ★ STEP1: ここをあなたのFirebase設定に書き換えてください ★
+// Firebase Console → プロジェクト設定 → マイアプリ → 設定コード
+// ================================================================
+const FIREBASE_CONFIG = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+  databaseURL: "https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT_ID.appspot.com",
+  messagingSenderId: "000000000000",
+  appId: "1:000000000000:web:xxxxxxxxxxxx"
+};
+// ================================================================
+
+let db = null;
+const FB_OK = FIREBASE_CONFIG.apiKey !== "YOUR_API_KEY";
+if(FB_OK){
+  try{ firebase.initializeApp(FIREBASE_CONFIG); db = firebase.database(); }
+  catch(e){ console.warn("Firebase error:", e); }
+}
+
+const store = {
+  save(id, data){
+    try{ localStorage.setItem("sm_"+id, JSON.stringify(data)); }catch{}
+    if(db) db.ref("projects/"+id).set(data);
+  },
+  async load(id){
+    if(db){
+      try{
+        const snap = await db.ref("projects/"+id).once("value");
+        if(snap.val()) return snap.val();
+      }catch{}
+    }
+    try{ const v=localStorage.getItem("sm_"+id); if(v) return JSON.parse(v); }catch{}
+    return null;
+  },
+  listen(id, cb){
+    if(!db) return ()=>{};
+    const ref = db.ref("projects/"+id);
+    ref.on("value", snap=>{ if(snap.val()) cb(snap.val()); });
+    return ()=>ref.off();
+  }
+};
+
+const S={
+  ja:{appSub:"グループの割り勘を簡単に",newProject:"新しいプロジェクト",newProjectSub:"プロジェクト名を入れてスタート",projectNamePH:"例：沖縄旅行、歓迎会 🎉",createBtn:"プロジェクト作成",orJoin:"または参加コードで入る",joinPH:"プロジェクトID（6文字）",joinBtn:"参加",shareTitle:"シェア・招待",copyLink:"IDをコピー",copied:"コピー済み ✓",offlineRates:"固定レート使用中",updated:(d)=>`${d} 更新`,settleLabel:"精算通貨",settleSub:"精算金額の表示通貨",tabM:"👥 メンバー",tabE:"💳 支出",tabR:"🧾 精算",membersTitle:(n)=>`メンバー（${n}人）`,addMember:"追加",memberPH:(i)=>`メンバー${i+1}`,memberTip:"💡 支出タブで立替者と対象者を設定し、精算タブで結果を確認できます。",expTitle:(n)=>`支出（${n}件）`,addExp:"追加",descPH:"内容（例: ランチ代、タクシー）",amtPH:"金額",paidBy:"支払った人",targets:"対象者",del:"削除",noExp:["💳","支出がありません","「追加」ボタンで記録してください"],totalSpent:"合計支出",equalSplit:"均等割",weightTitle:"重み付け精算",weightSub:"先輩が多め・ノンアル・途中退席など",weightTip:"倍率を設定（先輩 1.5、ノンアル 0.7、途中退席 0.5 など）",weightUnit:"倍",balTitle:"各メンバーの収支",txTitle:"送金指示",settled:["✓","精算済みです"],noData:["🧾","支出データがありません","「支出」タブで記録してください"],minMembers:"最低2人必要です",saving:"保存中…",saved:"同期済み ✓",savedLocal:"保存済み ✓",back:"← トップ",syncNote:"このIDを友達に送ればリアルタイムで一緒に編集できます",syncNoteLocal:"※Firebase未設定：このブラウザのみで保存されます",notFound:"プロジェクトが見つかりません",fetchingRates:"レート取得中…",connecting:"接続中…",dateLocale:"ja-JP",noFirebase:"⚠️ Firebase未設定（ローカルのみ）"},
+  en:{appSub:"Split bills with your group",newProject:"New Project",newProjectSub:"Enter a project name to get started",projectNamePH:"e.g. Okinawa Trip, Welcome Party 🎉",createBtn:"Create Project",orJoin:"or join with a project ID",joinPH:"Project ID (6 chars)",joinBtn:"Join",shareTitle:"Share & Invite",copyLink:"Copy ID",copied:"Copied ✓",offlineRates:"Using fixed rates",updated:(d)=>`Updated ${d}`,settleLabel:"Settlement Currency",settleSub:"Currency for final amounts",tabM:"👥 Members",tabE:"💳 Expenses",tabR:"🧾 Result",membersTitle:(n)=>`Members (${n})`,addMember:"Add",memberPH:(i)=>`Member ${i+1}`,memberTip:"💡 Set payer & members in Expenses, then check Result.",expTitle:(n)=>`Expenses (${n})`,addExp:"Add",descPH:"Description (e.g. Lunch, Taxi)",amtPH:"Amount",paidBy:"Paid by",targets:"Split among",del:"Delete",noExp:["💳","No expenses yet",'Tap "Add" to record'],totalSpent:"Total Spent",equalSplit:"Equal split",weightTitle:"Weighted split",weightSub:"Seniority, non-drinkers, early leavers…",weightTip:"Multipliers: Senior 1.5, Non-drinker 0.7, Early leaver 0.5",weightUnit:"×",balTitle:"Individual balances",txTitle:"Payment instructions",settled:["✓","All settled!"],noData:["🧾","No expenses","Add expenses in the Expenses tab"],minMembers:"At least 2 members required",saving:"Saving…",saved:"Synced ✓",savedLocal:"Saved ✓",back:"← Home",syncNote:"Share this ID so friends can edit together in real-time",syncNoteLocal:"※Firebase not set: saved locally only",notFound:"Project not found",fetchingRates:"Fetching rates…",connecting:"Connecting…",dateLocale:"en-US",noFirebase:"⚠️ Firebase not configured (local only)"},
+};
+
+const CURR=[{code:"JPY",sym:"¥",ja:"日本円",en:"Japanese Yen"},{code:"USD",sym:"$",ja:"米ドル",en:"US Dollar"},{code:"EUR",sym:"€",ja:"ユーロ",en:"Euro"},{code:"GBP",sym:"£",ja:"英ポンド",en:"British Pound"},{code:"CNY",sym:"¥",ja:"中国元",en:"Chinese Yuan"},{code:"KRW",sym:"₩",ja:"韓国ウォン",en:"Korean Won"},{code:"THB",sym:"฿",ja:"タイバーツ",en:"Thai Baht"},{code:"TWD",sym:"NT$",ja:"台湾ドル",en:"Taiwan Dollar"},{code:"AUD",sym:"A$",ja:"豪ドル",en:"Australian Dollar"},{code:"SGD",sym:"S$",ja:"シンガポールドル",en:"Singapore Dollar"}];
+const FALLBACK={JPY:1,USD:0.00652,EUR:0.00550,GBP:0.00513,CNY:0.04730,KRW:9.30,THB:0.226,TWD:0.215,AUD:0.01020,SGD:0.00874};
+const fmt=(n,code)=>{const c=CURR.find(x=>x.code===code);return(c?c.sym:"")+Math.ceil(Math.abs(n)).toLocaleString();};
+const AV=[["#9333ea","#7c3aed"],["#ec4899","#f472b6"],["#f59e0b","#fbbf24"],["#10b981","#34d399"],["#3b82f6","#60a5fa"],["#8b5cf6","#a78bfa"]];
+const genId=()=>Math.random().toString(36).slice(2,8).toUpperCase();
+const newProj=(name)=>({name,members:[{id:"m1",name:""},{id:"m2",name:""},{id:"m3",name:""}],expenses:[],settle:"JPY",useW:false,weights:{m1:1,m2:1,m3:1},createdAt:Date.now()});
+
+const C={bg:"#f5f3ff",surface:"#fff",s2:"#faf5ff",border:"#e9d5ff",accent:"#9333ea",accentDk:"#7e22ce",accentSoft:"#f3e8ff",text:"#581c87",muted:"#9333ea",green:"#10b981",red:"#ef4444",purple:"#7c3aed"};
+const card={background:C.surface,border:`1px solid ${C.border}`,borderRadius:20,boxShadow:"0 2px 16px rgba(147,51,234,.08)"};
+const inner={background:C.s2,border:`1px solid ${C.border}`,borderRadius:14};
+const inp={background:C.s2,border:`1px solid ${C.border}`,borderRadius:14,color:C.text,padding:"14px 16px",fontSize:16,outline:"none",width:"100%",boxSizing:"border-box",WebkitAppearance:"none",display:"block"};
+const lbl={fontSize:11,letterSpacing:"0.12em",textTransform:"uppercase",color:C.muted,fontWeight:700};
+const btnP={background:`linear-gradient(135deg,${C.accent},${C.purple})`,color:"#fff",border:"none",borderRadius:16,padding:"16px 22px",fontSize:16,fontWeight:800,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,boxShadow:"0 4px 14px rgba(147,51,234,.35)",width:"100%"};
+const btnSoft={background:C.accentSoft,color:C.accentDk,border:`1px solid ${C.border}`,borderRadius:14,padding:"12px 20px",fontSize:14,fontWeight:700,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6};
+const btnD={background:"transparent",color:C.red,border:"1px solid #fecaca",borderRadius:12,padding:"10px 14px",fontSize:14,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6};
+const tagOn={background:C.accent,color:"#fff",border:"none",borderRadius:999,padding:"11px 20px",fontSize:14,cursor:"pointer",fontWeight:700};
+const tagOff={background:C.s2,color:C.muted,border:`1px solid ${C.border}`,borderRadius:999,padding:"11px 20px",fontSize:14,cursor:"pointer",fontWeight:600};
+
+const PlusIco=()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
+const TrashIco=()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>;
+const ArrowIco=()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>;
+const ShareIco=()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>;
+const RefreshIco=()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>;
+
+const Avatar=({name,idx=0,size=36})=>{const[c1,c2]=AV[idx%AV.length];return <div style={{width:size,height:size,borderRadius:"50%",background:`linear-gradient(135deg,${c1},${c2})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*.42,fontWeight:800,color:"#fff",flexShrink:0,userSelect:"none",boxShadow:"0 2px 8px rgba(147,51,234,.15)"}}>{(name||"?")[0].toUpperCase()}</div>;};
+const Toggle=({on,onChange,small=false})=><div onClick={()=>onChange(!on)} style={{width:small?40:48,height:small?24:28,background:on?"#9333ea":"#d1d5db",borderRadius:999,position:"relative",cursor:"pointer",transition:"background .2s",flexShrink:0}}><div style={{position:"absolute",top:small?2:3,left:small?2:3,width:small?20:22,height:small?20:22,background:"#fff",borderRadius:"50%",transition:"transform .2s",transform:on?`translateX(${small?16:20}px)`:"none",boxShadow:"0 2px 5px rgba(0,0,0,.2)"}}/></div>;
+
+const MemberInput=({member,idx,onCommit,onDelete,placeholder})=>{
+  const ref=useRef(null);
+  useEffect(()=>{if(ref.current&&ref.current!==document.activeElement)ref.current.value=member.name;},[member.name]);
+  return(
+    <div style={{...card,padding:"14px 16px",display:"flex",alignItems:"center",gap:14}}>
+      <Avatar name={member.name||String(idx+1)} idx={idx} size={38}/>
+      <input ref={ref} type="text" defaultValue={member.name} placeholder={placeholder}
+        onBlur={e=>onCommit(member.id,e.target.value)}
+        onKeyDown={e=>e.key==="Enter"&&e.target.blur()}
+        style={{...inp,flex:1}}/>
+      <button style={{...btnD,padding:"10px"}} onClick={()=>onDelete(member.id)}><TrashIco/></button>
+    </div>
+  );
+};
+
+function App(){
+  const[lang,setLang]=useState("ja");
+  const t=useMemo(()=>S[lang],[lang]);
+  const[screen,setScreen]=useState("home");
+  const[pid,setPid]=useState(null);
+  const[proj,setProj]=useState(null);
+  const[saveStatus,setSaveStatus]=useState("saved");
+  const[rates,setRates]=useState(FALLBACK);
+  const[ratesInfo,setRatesInfo]=useState({loading:true,updatedAt:null});
+  const[tab,setTab]=useState("members");
+  const[copied,setCopied]=useState(false);
+  const[joinVal,setJoinVal]=useState("");
+  const[nameVal,setNameVal]=useState("");
+  const saveTimer=useRef(null);
+  const unsubRef=useRef(null);
+
+  useEffect(()=>{
+    if(!pid||screen!=="project")return;
+    const unsub=store.listen(pid,remote=>setProj(remote));
+    unsubRef.current=unsub;
+    return()=>{if(unsubRef.current)unsubRef.current();};
+  },[pid,screen]);
+
+  const mutate=useCallback((id,fn)=>{
+    setProj(prev=>{
+      const next=fn(prev||newProj(""));
+      if(saveTimer.current)clearTimeout(saveTimer.current);
+      setSaveStatus("saving");
+      saveTimer.current=setTimeout(()=>{store.save(id,next);setSaveStatus("saved");},400);
+      return next;
+    });
+  },[]);
+
+  const fetchRates=useCallback(async()=>{
+    setRatesInfo(p=>({...p,loading:true}));
+    try{
+      const symbols=["USD","EUR","GBP","CNY","KRW","THB","TWD","AUD","SGD"].join(",");
+      const url=`https://api.frankfurter.app/latest?from=EUR&to=JPY,${symbols}`;
+      const r=await fetch(url);
+      if(!r.ok)throw new Error();
+      const data=await r.json();
+      const jpyPerEur=data.rates.JPY;
+      const nextRates={JPY:1};
+      for(const c of["USD","EUR","GBP","CNY","KRW","THB","TWD","AUD","SGD"]){
+        if(c==="EUR"){nextRates.EUR=1/jpyPerEur;}
+        else{const cPerEur=data.rates[c];if(cPerEur)nextRates[c]=cPerEur/jpyPerEur;}
+      }
+      setRates(nextRates);setRatesInfo({loading:false,updatedAt:new Date()});
+    }catch{setRates(FALLBACK);setRatesInfo({loading:false,updatedAt:null});}
+  },[]);
+
+  useEffect(()=>{fetchRates();},[]);
+
+  const createProject=async()=>{
+    if(!nameVal.trim())return;
+    const id=genId(),data=newProj(nameVal.trim());
+    store.save(id,data);
+    setPid(id);setProj(data);setScreen("project");setTab("members");
+  };
+  const joinProject=async(idArg)=>{
+    const id=(idArg||joinVal).trim().toUpperCase();if(!id)return;
+    const data=await store.load(id);
+    if(data){setPid(id);setProj(data);setScreen("project");setTab("members");}
+    else alert(t.notFound);
+  };
+
+  const commitName=(mid,name)=>mutate(pid,p=>({...p,members:(p.members||[]).map(m=>m.id===mid?{...m,name}:m)}));
+  const addMember=()=>{const id="m"+Date.now();mutate(pid,p=>({...p,members:[...(p.members||[]),{id,name:""}],weights:{...(p.weights||{}),[id]:1}}));};
+  const delMember=(mid)=>{if((proj?.members||[]).length<=2){alert(t.minMembers);return;}mutate(pid,p=>({...p,members:(p.members||[]).filter(m=>m.id!==mid),expenses:(p.expenses||[]).map(e=>({...e,beneficiaries:(e.beneficiaries||[]).filter(b=>b!==mid)}))}));};
+  const addExpense=()=>{const id="e"+Date.now();mutate(pid,p=>{const members=p.members||[];const payer=members[0]?.id||"m1";const all=members.map(m=>m.id);return{...p,expenses:[...(p.expenses||[]),{id,desc:"",amount:"",currency:"JPY",paidBy:payer,beneficiaries:all}]};});};
+  const delExpense=(id)=>mutate(pid,p=>({...p,expenses:(p.expenses||[]).filter(e=>e.id!==id)}));
+  const updExp=(id,k,v)=>mutate(pid,p=>({...p,expenses:(p.expenses||[]).map(e=>e.id===id?{...e,[k]:v}:e)}));
+  const toggleB=(eid,mid)=>mutate(pid,p=>({...p,expenses:(p.expenses||[]).map(e=>{if(e.id!==eid)return e;const bens=Array.isArray(e.beneficiaries)?e.beneficiaries:[];const has=bens.includes(mid);if(has&&bens.length===1)return e;return{...e,beneficiaries:has?bens.filter(b=>b!==mid):[...bens,mid]};})  }));
+  const updSettle=(v)=>mutate(pid,p=>({...p,settle:v||"JPY"}));
+  const updUseW=(v)=>mutate(pid,p=>({...p,useW:v}));
+  const updWeight=(mid,v)=>mutate(pid,p=>({...p,weights:{...(p.weights||{}),[mid]:v}}));
+
+  const toJPY=(a,c)=>rates[c]?a/rates[c]:a;
+  const fromJPY=(j,c)=>rates[c]?j*rates[c]:j;
+
+  const calcBal=()=>{
+    if(!proj)return{};
+    const members=proj.members||[],expenses=proj.expenses||[],weights=proj.weights||{},settle=proj.settle||"JPY";
+    const bal={};members.forEach(m=>bal[m.id]=0);
+    expenses.forEach(exp=>{
+      const amt=parseFloat(exp.amount)||0;if(!amt)return;
+      const bens=Array.isArray(exp.beneficiaries)?exp.beneficiaries:[];if(bens.length===0)return;
+      const jpy=toJPY(amt,exp.currency);const bms=members.filter(m=>bens.includes(m.id));if(bms.length===0)return;
+      if(proj.useW){const tw=bms.reduce((s,m)=>s+(parseFloat(weights[m.id])||1),0);bms.forEach(m=>{bal[m.id]-=jpy*((parseFloat(weights[m.id])||1)/tw);});}
+      else{bms.forEach(m=>{bal[m.id]-=jpy/bms.length;});}
+      const payer=exp.paidBy||(members[0]?members[0].id:null);if(payer){if(bal[payer]===undefined)bal[payer]=0;bal[payer]+=jpy;}
+    });
+    const res={};members.forEach(m=>{res[m.id]=fromJPY(bal[m.id]||0,settle);});return res;
+  };
+  const calcTx=(bal)=>{const members=proj?.members||[];const tx=[];const cs=members.filter(m=>(bal[m.id]||0)>0.5).map(m=>({...m,b:bal[m.id]})).sort((a,z)=>z.b-a.b);const ds=members.filter(m=>(bal[m.id]||0)<-0.5).map(m=>({...m,b:-(bal[m.id]||0)})).sort((a,z)=>z.b-a.b);const c=cs.map(x=>({...x})),d=ds.map(x=>({...x}));let i=0,j=0;while(i<c.length&&j<d.length){const a=Math.min(c[i].b,d[j].b);tx.push({from:d[j],to:c[i],amount:a});c[i].b-=a;d[j].b-=a;if(c[i].b<0.5)i++;if(d[j].b<0.5)j++;}return tx;};
+  const memIdx=id=>proj?.members?.findIndex(m=>m.id===id)??0;
+  const chips=["USD","EUR","GBP","CNY","KRW"].filter(c=>rates[c]).map(c=>({c,label:`1${CURR.find(x=>x.code===c).sym}=¥${Math.round(1/rates[c]).toLocaleString()}`}));
+  const copyId=()=>{try{navigator.clipboard.writeText(pid);}catch{}setCopied(true);setTimeout(()=>setCopied(false),2500);};
+
+  const LangToggle=()=>(
+    <div style={{display:"inline-flex",alignItems:"center",gap:8,background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,padding:"6px 16px"}}>
+      <span style={{fontSize:13,fontWeight:lang==="ja"?800:500,color:lang==="ja"?C.accentDk:C.muted,cursor:"pointer"}} onClick={()=>setLang("ja")}>日本語</span>
+      <Toggle on={lang==="en"} onChange={v=>setLang(v?"en":"ja")} small/>
+      <span style={{fontSize:13,fontWeight:lang==="en"?800:500,color:lang==="en"?C.accentDk:C.muted,cursor:"pointer"}} onClick={()=>setLang("en")}>EN</span>
+    </div>
+  );
+  const tabBtn=(key,label)=><button key={key} onClick={()=>setTab(key)} style={{flex:1,padding:"14px 4px",borderRadius:14,border:"none",fontSize:14,fontWeight:800,transition:"all .2s",background:tab===key?`linear-gradient(135deg,${C.accent},${C.purple})`:C.s2,color:tab===key?"#fff":C.muted,boxShadow:tab===key?"0 4px 12px rgba(147,51,234,.3)":"none",cursor:"pointer"}}>{label}</button>;
+
+  if(screen==="home")return(
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:"24px 16px"}}>
+      <div style={{position:"fixed",top:"-10%",right:"-5%",width:320,height:320,borderRadius:"50%",background:"radial-gradient(circle,rgba(147,51,234,.08),transparent 70%)",pointerEvents:"none"}}/>
+      <div style={{position:"fixed",bottom:"-5%",left:"-5%",width:260,height:260,borderRadius:"50%",background:"radial-gradient(circle,rgba(124,58,237,.08),transparent 70%)",pointerEvents:"none"}}/>
+      <div style={{width:"100%",maxWidth:420,position:"relative",zIndex:1}}>
+        <div style={{textAlign:"center",marginBottom:36}}>
+          <div style={{width:88,height:88,borderRadius:28,background:`linear-gradient(135deg,${C.accent},${C.purple})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:42,margin:"0 auto 18px",boxShadow:"0 8px 28px rgba(147,51,234,.25)"}}>💸</div>
+          <h1 style={{fontSize:36,fontWeight:900,color:C.text,letterSpacing:"-.03em",marginBottom:8}}>Splitmate</h1>
+          <p style={{fontSize:15,color:C.muted,marginBottom:4}}>{t.appSub}</p>
+          {!FB_OK&&<p style={{fontSize:11,color:C.red,marginTop:14,background:"#fef2f2",border:"1px solid #fecaca",borderRadius:10,padding:"5px 12px",display:"inline-block"}}>{t.noFirebase}</p>}
+          {FB_OK&&<p style={{fontSize:11,color:C.green,marginTop:14,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:10,padding:"5px 12px",display:"inline-block"}}>🔥 Firebase接続済み</p>}
+          <div style={{marginTop:12}}><LangToggle/></div>
+        </div>
+        <div style={{...card,padding:26,marginBottom:16}}>
+          <p style={{fontSize:19,fontWeight:900,color:C.text,marginBottom:5}}>{t.newProject}</p>
+          <p style={{fontSize:14,color:C.muted,marginBottom:20}}>{t.newProjectSub}</p>
+          <input type="text" value={nameVal} onChange={e=>setNameVal(e.target.value)} onKeyDown={e=>e.key==="Enter"&&createProject()} placeholder={t.projectNamePH} style={{...inp,marginBottom:16}}/>
+          <button style={btnP} onClick={createProject}><PlusIco/> {t.createBtn}</button>
+        </div>
+        <div style={{...card,padding:24}}>
+          <p style={{fontSize:15,color:C.muted,marginBottom:16}}>{t.orJoin}</p>
+          <div style={{display:"flex",gap:12}}>
+            <input type="text" value={joinVal} onChange={e=>setJoinVal(e.target.value.toUpperCase())} onKeyDown={e=>e.key==="Enter"&&joinProject()} placeholder={t.joinPH} style={{...inp,flex:1,letterSpacing:"0.14em",fontFamily:"monospace",fontWeight:800}}/>
+            <button style={{...btnSoft,flexShrink:0}} onClick={()=>joinProject()}>{t.joinBtn}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  if(!proj)return<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",color:C.muted,fontSize:17}}>{t.connecting}</div>;
+
+  const bal=calcBal(),txs=calcTx(bal);
+  const expensesSafe=proj.expenses||[],membersSafe=proj.members||[],settleSafe=proj.settle||"JPY";
+  const total=expensesSafe.reduce((s,e)=>s+fromJPY(toJPY(parseFloat(e.amount)||0,e.currency),settleSafe),0);
+
+  return(
+    <div style={{minHeight:"100vh",background:C.bg}}>
+      <div style={{position:"fixed",top:"-10%",right:"-5%",width:300,height:300,borderRadius:"50%",background:"radial-gradient(circle,rgba(147,51,234,.08),transparent 70%)",pointerEvents:"none",zIndex:0}}/>
+      <div style={{maxWidth:620,margin:"0 auto",padding:"0 16px 52px",position:"relative",zIndex:1}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,padding:"16px 0 12px"}}>
+          <button onClick={()=>setScreen("home")} style={{background:"none",border:"none",color:C.muted,fontSize:15,cursor:"pointer",display:"flex",alignItems:"center",gap:5,padding:"8px 0",fontWeight:700}}>{t.back}</button>
+          <div style={{flex:1}}/>
+          <LangToggle/>
+        </div>
+
+        <div style={{...card,padding:"20px 22px",marginBottom:14}}>
+          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12,marginBottom:16}}>
+            <div><p style={{...lbl,marginBottom:5}}>PROJECT</p><h2 style={{fontSize:24,fontWeight:900,color:C.text,lineHeight:1.2}}>{proj.name}</h2></div>
+            <p style={{fontSize:11,color:saveStatus==="saving"?C.accent:C.green,fontFamily:"monospace",flexShrink:0,marginTop:5,fontWeight:800}}>{saveStatus==="saving"?t.saving:(FB_OK?t.saved:t.savedLocal)}</p>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap",marginBottom:14}}>
+            <button onClick={fetchRates} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:5,display:"flex",alignItems:"center"}}><RefreshIco/></button>
+            {ratesInfo.loading?<span style={{fontSize:11,color:C.muted}}>{t.fetchingRates}</span>:chips.map(r=><span key={r.c} style={{background:C.accentSoft,border:`1px solid ${C.border}`,borderRadius:9,padding:"4px 10px",fontSize:11,color:C.accentDk,fontFamily:"monospace",fontWeight:700}}>{r.label}</span>)}
+            {!ratesInfo.loading&&<span style={{fontSize:10,color:ratesInfo.updatedAt?C.muted:C.red,fontFamily:"monospace",marginLeft:"auto"}}>{ratesInfo.updatedAt?t.updated(ratesInfo.updatedAt.toLocaleDateString(t.dateLocale)):t.offlineRates}</span>}
+          </div>
+          <div style={{padding:"16px 18px",background:C.accentSoft,borderRadius:16,border:`1px solid ${C.border}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:8}}><ShareIco/><p style={{fontSize:15,fontWeight:900,color:C.accentDk}}>{t.shareTitle}</p></div>
+            <p style={{fontSize:13,color:C.muted,marginBottom:12}}>{FB_OK?t.syncNote:t.syncNoteLocal}</p>
+            <div style={{display:"flex",alignItems:"center",gap:12}}>
+              <div style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 16px",fontFamily:"monospace",fontSize:22,fontWeight:900,color:C.text,letterSpacing:"0.2em"}}>{pid}</div>
+              <button style={{...btnSoft,flexShrink:0,padding:"14px 18px"}} onClick={copyId}>{copied?"✓":t.copyLink}</button>
+            </div>
+          </div>
+        </div>
+
+        <div style={{...card,padding:16,marginBottom:14,display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+          <div style={{flex:1}}><p style={{...lbl,marginBottom:3}}>{t.settleLabel}</p><p style={{fontSize:13,color:C.muted}}>{t.settleSub}</p></div>
+          <select value={settleSafe} onChange={e=>updSettle(e.target.value)} style={{...inp,width:"auto",minWidth:175}}>
+            {CURR.map(c=><option key={c.code} value={c.code}>{c.sym} {lang==="ja"?c.ja:c.en}</option>)}
+          </select>
+        </div>
+
+        <div style={{display:"flex",gap:7,marginBottom:16,background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:7}}>
+          {tabBtn("members",t.tabM)}{tabBtn("expenses",t.tabE)}
+          <button onClick={()=>setTab("result")} style={{flex:1,padding:"14px 4px",borderRadius:14,border:"none",fontSize:14,fontWeight:800,transition:"all .2s",background:tab==="result"?`linear-gradient(135deg,${C.accent},${C.purple})`:C.s2,color:tab==="result"?"#fff":C.muted,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+            {t.tabR}{txs.length>0&&tab!=="result"&&<span style={{background:"rgba(255,255,255,.35)",borderRadius:999,padding:"2px 8px",fontSize:11}}>{txs.length}</span>}
+          </button>
+        </div>
+
+        {tab==="members"&&<div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+            <p style={lbl}>{t.membersTitle(membersSafe.length)}</p>
+            <button style={btnSoft} onClick={addMember}><PlusIco/> {t.addMember}</button>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            {membersSafe.map((m,i)=><MemberInput key={m.id} member={m} idx={i} onCommit={commitName} onDelete={delMember} placeholder={t.memberPH(i)}/>)}
+          </div>
+          <div style={{marginTop:16,padding:16,borderRadius:16,background:C.accentSoft,border:`1px solid ${C.border}`}}>
+            <p style={{fontSize:14,color:C.accentDk,lineHeight:1.8}}>{t.memberTip}</p>
+          </div>
+        </div>}
+
+        {tab==="expenses"&&<div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+            <p style={lbl}>{t.expTitle(expensesSafe.length)}</p>
+            <button style={btnSoft} onClick={addExpense}><PlusIco/> {t.addExp}</button>
+          </div>
+          {expensesSafe.length===0&&<div style={{textAlign:"center",padding:"52px 22px",color:C.muted}}><p style={{fontSize:44,marginBottom:14}}>{t.noExp[0]}</p><p style={{fontSize:17,marginBottom:7,color:C.text,fontWeight:700}}>{t.noExp[1]}</p><p style={{fontSize:14}}>{t.noExp[2]}</p></div>}
+          <div style={{display:"flex",flexDirection:"column",gap:16}}>
+            {expensesSafe.map(exp=>{const bens=Array.isArray(exp.beneficiaries)?exp.beneficiaries:[];return(
+              <div key={exp.id} style={{...card,padding:20}}>
+                <input type="text" value={exp.desc} onChange={e=>updExp(exp.id,"desc",e.target.value)} placeholder={t.descPH} style={{...inp,marginBottom:14}}/>
+                <div style={{display:"flex",gap:12,marginBottom:7}}>
+                  <input type="text" inputMode="decimal" value={exp.amount} onChange={e=>{let v=e.target.value.replace(/[^\d.]/g,"");if(/^0\d/.test(v))v=v.replace(/^0+/,"");updExp(exp.id,"amount",v);}} placeholder={t.amtPH} style={{...inp,flex:1}}/>
+                  <select value={exp.currency} onChange={e=>updExp(exp.id,"currency",e.target.value)} style={{...inp,width:95,flexShrink:0}}>
+                    {CURR.map(c=><option key={c.code} value={c.code}>{c.code}</option>)}
+                  </select>
+                </div>
+                {exp.currency!=="JPY"&&parseFloat(exp.amount)>0&&<p style={{fontSize:13,color:C.muted,marginBottom:14,fontFamily:"monospace"}}>≈{fmt(toJPY(parseFloat(exp.amount),exp.currency),"JPY")}</p>}
+                <p style={{...lbl,marginBottom:9}}>{t.paidBy}</p>
+                <select value={exp.paidBy} onChange={e=>updExp(exp.id,"paidBy",e.target.value)} style={{...inp,marginBottom:16}}>
+                  {membersSafe.map((m,i)=><option key={m.id} value={m.id}>{m.name||t.memberPH(i)}</option>)}
+                </select>
+                <p style={{...lbl,marginBottom:11}}>{t.targets}</p>
+                <div style={{display:"flex",flexWrap:"wrap",gap:9,marginBottom:16}}>
+                  {membersSafe.map((m,i)=><button key={m.id} onClick={()=>toggleB(exp.id,m.id)} style={bens.includes(m.id)?tagOn:tagOff}>{m.name||t.memberPH(i)}</button>)}
+                </div>
+                <div style={{height:1,background:C.border,marginBottom:14}}/>
+                <button style={btnD} onClick={()=>delExpense(exp.id)}><TrashIco/> {t.del}</button>
+              </div>
+            )})}
+          </div>
+        </div>}
+
+        {tab==="result"&&<div>
+          {expensesSafe.length===0?<div style={{textAlign:"center",padding:"52px 22px",color:C.muted}}><p style={{fontSize:44,marginBottom:14}}>{t.noData[0]}</p><p style={{fontSize:17,marginBottom:7,color:C.text,fontWeight:700}}>{t.noData[1]}</p><p style={{fontSize:14}}>{t.noData[2]}</p></div>:<>
+            <div style={{...card,padding:24,marginBottom:16,background:`linear-gradient(135deg,${C.accent},${C.purple})`}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div><p style={{...lbl,color:"rgba(255,255,255,.7)",marginBottom:7}}>{t.totalSpent}</p><p style={{fontSize:38,fontWeight:900,color:"#fff"}}>{fmt(total,settleSafe)}</p></div>
+                <div style={{textAlign:"right"}}><p style={{...lbl,color:"rgba(255,255,255,.7)",marginBottom:7}}>{t.equalSplit}</p><p style={{fontSize:24,fontWeight:800,color:"#fff",fontFamily:"monospace"}}>{fmt(total/(membersSafe.length||1),settleSafe)}</p></div>
+              </div>
+            </div>
+            <div style={{...card,padding:20,marginBottom:16}}>
+              <p style={{...lbl,marginBottom:16}}>{t.balTitle}</p>
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                {membersSafe.map(m=>{const b=bal[m.id]||0,color=b>0.5?C.green:b<-0.5?C.red:C.muted,bg=b>0.5?"#f0fdf4":b<-0.5?"#fef2f2":C.s2;return<div key={m.id} style={{padding:"16px 18px",background:bg,borderRadius:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{display:"flex",alignItems:"center",gap:14}}><Avatar name={m.name} idx={memIdx(m.id)} size={38}/><span style={{fontSize:16,fontWeight:700,color:C.text}}>{m.name||"?"}</span></div><span style={{fontFamily:"monospace",fontSize:20,fontWeight:900,color}}>{b>0.5?"+":b<-0.5?"-":""}{fmt(Math.abs(b),settleSafe)}</span></div>;})}
+              </div>
+            </div>
+            <div style={{...card,padding:20}}>
+              <p style={{...lbl,marginBottom:16}}>{t.txTitle}</p>
+              {txs.length===0?<div style={{textAlign:"center",padding:26,color:C.green}}><p style={{fontSize:32,marginBottom:10}}>{t.settled[0]}</p><p style={{fontSize:15}}>{t.settled[1]}</p></div>:
+              <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                {txs.map((tx,i)=><div key={i} style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderLeft:`5px solid ${C.green}`,borderRadius:16,padding:"16px 20px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}><Avatar name={tx.from.name} idx={memIdx(tx.from.id)} size={38}/><span style={{fontSize:16,fontWeight:800,color:C.text}}>{tx.from.name}</span><ArrowIco/><Avatar name={tx.to.name} idx={memIdx(tx.to.id)} size={38}/><span style={{fontSize:16,fontWeight:800,color:C.text}}>{tx.to.name}</span><span style={{marginLeft:"auto",fontFamily:"monospace",fontSize:21,fontWeight:900,color:C.green}}>{fmt(tx.amount,settleSafe)}</span></div>)}
+              </div>}
+            </div>
+          </>}
+        </div>}
+
+        <p style={{textAlign:"center",marginTop:36,color:C.muted,fontSize:11,fontFamily:"monospace",fontWeight:600}}>
+          Splitmate {FB_OK?"· 🔥 Realtime Sync":"· Local Mode"} · {ratesInfo.updatedAt?`${ratesInfo.updatedAt.toLocaleDateString(t.dateLocale)}`:"offline"}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
